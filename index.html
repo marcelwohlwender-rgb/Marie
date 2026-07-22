@@ -1048,6 +1048,11 @@ function advanceMainReward() {
   }).then(() => ({ rewardEarned, reward: rewardText }));
 }
 
+function showError(e) {
+  console.error(e);
+  alert('Fehler beim Speichern: ' + (e && e.message ? e.message : e) + '\n\nBitte Screenshot davon machen und schicken.');
+}
+
 async function addTask() {
   const titleInput = document.getElementById('new-task-title');
   const pointsInput = document.getElementById('new-task-points');
@@ -1057,32 +1062,43 @@ async function addTask() {
   const desc = descInput.value.trim();
   if (!title) return;
   const id = 't' + Date.now();
-  await dataRef.child('tasks/' + id).set({ id, title, points, desc });
-  titleInput.value = '';
-  descInput.value = '';
+  try {
+    await dataRef.child('tasks/' + id).set({ id, title, points, desc });
+    titleInput.value = '';
+    descInput.value = '';
+  } catch (e) {
+    showError(e);
+  }
 }
 
 async function removeTask(id) {
-  await dataRef.child('tasks/' + id).remove();
+  try {
+    await dataRef.child('tasks/' + id).remove();
+  } catch (e) {
+    showError(e);
+  }
 }
 
 async function completeTask(id) {
   const task = (state.tasks || {})[id];
   if (!task) return;
+  try {
+    const logId = dataRef.child('log').push().key;
+    const updates = {};
+    updates['tasks/' + id] = null;
+    updates['log/' + logId] = { id: logId, text: 'Aufgabe erledigt: ' + task.title, points: task.points, ts: Date.now() };
+    await dataRef.update(updates);
 
-  const logId = dataRef.child('log').push().key;
-  const updates = {};
-  updates['tasks/' + id] = null;
-  updates['log/' + logId] = { id: logId, text: 'Aufgabe erledigt: ' + task.title, points: task.points, ts: Date.now() };
-  await dataRef.update(updates);
-
-  const result = await advanceMainReward();
-  if (result.rewardEarned) {
-    const rewardLogId = dataRef.child('log').push().key;
-    await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Belohnung erreicht: ' + (result.reward || '?'), points: 0, ts: Date.now(), reward: true });
-    showToast('🎉 Belohnung erreicht! ' + (result.reward || '?'), 0);
-  } else {
-    showToast('Neuer Stern für: ' + task.title, task.points);
+    const result = await advanceMainReward();
+    if (result.rewardEarned) {
+      const rewardLogId = dataRef.child('log').push().key;
+      await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Belohnung erreicht: ' + (result.reward || '?'), points: 0, ts: Date.now(), reward: true });
+      showToast('🎉 Belohnung erreicht! ' + (result.reward || '?'), 0);
+    } else {
+      showToast('Neuer Stern für: ' + task.title, task.points);
+    }
+  } catch (e) {
+    showError(e);
   }
 }
 
@@ -1095,13 +1111,21 @@ async function addSeries() {
   const reward = rewardInput.value.trim();
   if (!name) return;
   const id = 's' + Date.now();
-  await dataRef.child('series/' + id).set({ id, name, target, reward, count: 0, completedRounds: 0 });
-  nameInput.value = '';
-  rewardInput.value = '';
+  try {
+    await dataRef.child('series/' + id).set({ id, name, target, reward, count: 0, completedRounds: 0 });
+    nameInput.value = '';
+    rewardInput.value = '';
+  } catch (e) {
+    showError(e);
+  }
 }
 
 async function removeSeries(id) {
-  await dataRef.child('series/' + id).remove();
+  try {
+    await dataRef.child('series/' + id).remove();
+  } catch (e) {
+    showError(e);
+  }
 }
 
 async function giveSeriesStar(id) {
@@ -1112,32 +1136,36 @@ async function giveSeriesStar(id) {
   const seriesName = seriesBefore.name;
   const text = note ? note : 'Stern für „' + seriesName + '"';
 
-  let rewardEarned = false;
-  let rewardText = '';
-  await dataRef.child('series/' + id).transaction((current) => {
-    if (!current) return current;
-    current.count = (current.count || 0) + 1;
-    rewardText = current.reward || '';
-    if (current.count >= current.target) {
-      current.completedRounds = (current.completedRounds || 0) + 1;
-      current.count = 0;
-      rewardEarned = true;
+  try {
+    let rewardEarned = false;
+    let rewardText = '';
+    await dataRef.child('series/' + id).transaction((current) => {
+      if (!current) return undefined;
+      current.count = (current.count || 0) + 1;
+      rewardText = current.reward || '';
+      if (current.count >= current.target) {
+        current.completedRounds = (current.completedRounds || 0) + 1;
+        current.count = 0;
+        rewardEarned = true;
+      } else {
+        rewardEarned = false;
+      }
+      return current;
+    });
+
+    const logId = dataRef.child('log').push().key;
+    await dataRef.child('log/' + logId).set({ id: logId, text, points: 1, ts: Date.now(), seriesId: id, seriesName });
+    if (noteInput) noteInput.value = '';
+
+    if (rewardEarned) {
+      const rewardLogId = dataRef.child('log').push().key;
+      await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Serie „' + seriesName + '" komplett – Belohnung: ' + (rewardText || '?'), points: 0, ts: Date.now(), seriesId: id, seriesName, reward: true });
+      showToast('🎉 Serie „' + seriesName + '" komplett! Belohnung: ' + (rewardText || '?'), 0);
     } else {
-      rewardEarned = false;
+      showToast(text, 1);
     }
-    return current;
-  });
-
-  const logId = dataRef.child('log').push().key;
-  await dataRef.child('log/' + logId).set({ id: logId, text, points: 1, ts: Date.now(), seriesId: id, seriesName });
-  if (noteInput) noteInput.value = '';
-
-  if (rewardEarned) {
-    const rewardLogId = dataRef.child('log').push().key;
-    await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Serie „' + seriesName + '" komplett – Belohnung: ' + (rewardText || '?'), points: 0, ts: Date.now(), seriesId: id, seriesName, reward: true });
-    showToast('🎉 Serie „' + seriesName + '" komplett! Belohnung: ' + (rewardText || '?'), 0);
-  } else {
-    showToast(text, 1);
+  } catch (e) {
+    showError(e);
   }
 }
 
@@ -1146,17 +1174,21 @@ async function giveStar() {
   const message = msgInput.value.trim();
   if (!message) return;
 
-  const logId = dataRef.child('log').push().key;
-  await dataRef.child('log/' + logId).set({ id: logId, text: message, points: 1, ts: Date.now() });
-  msgInput.value = '';
+  try {
+    const logId = dataRef.child('log').push().key;
+    await dataRef.child('log/' + logId).set({ id: logId, text: message, points: 1, ts: Date.now() });
+    msgInput.value = '';
 
-  const result = await advanceMainReward();
-  if (result.rewardEarned) {
-    const rewardLogId = dataRef.child('log').push().key;
-    await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Belohnung erreicht: ' + (result.reward || '?'), points: 0, ts: Date.now(), reward: true });
-    showToast('🎉 Belohnung erreicht! ' + (result.reward || '?'), 0);
-  } else {
-    showToast(message, 1);
+    const result = await advanceMainReward();
+    if (result.rewardEarned) {
+      const rewardLogId = dataRef.child('log').push().key;
+      await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Belohnung erreicht: ' + (result.reward || '?'), points: 0, ts: Date.now(), reward: true });
+      showToast('🎉 Belohnung erreicht! ' + (result.reward || '?'), 0);
+    } else {
+      showToast(message, 1);
+    }
+  } catch (e) {
+    showError(e);
   }
 }
 
@@ -1176,8 +1208,12 @@ function toggleRewardEdit() {
 async function saveMainReward() {
   const input = document.getElementById('reward-edit-input');
   const value = input.value.trim();
-  await dataRef.child('mainReward/reward').set(value);
-  document.getElementById('reward-edit-row').style.display = 'none';
+  try {
+    await dataRef.child('mainReward/reward').set(value);
+    document.getElementById('reward-edit-row').style.display = 'none';
+  } catch (e) {
+    showError(e);
+  }
 }
 
 let toastTimer = null;
