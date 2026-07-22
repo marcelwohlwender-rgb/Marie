@@ -352,6 +352,22 @@
   .task-check::after { content: ''; }
   .task-check:hover::after { content: '✓'; }
   .task-check:hover { background: var(--sage); color: #06110C; box-shadow: 0 0 12px rgba(111,224,168,0.7); }
+  .task-check-done {
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--star-gold);
+    font-size: 1.1rem;
+    text-shadow: 0 0 10px rgba(242,193,78,0.75);
+  }
+  .task-item.task-done .task-title { color: var(--ink-soft); }
+  .task-item.task-done .task-points { color: var(--star-gold); }
 
   .task-title {
     flex: 1;
@@ -560,23 +576,40 @@
   }
 
   /* WhatsApp-style simulated notification */
+  #wa-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0);
+    z-index: 998;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.35s ease, background 0.35s ease;
+  }
+  #wa-backdrop.show {
+    background: rgba(0,0,0,0.45);
+    opacity: 1;
+    pointer-events: auto;
+  }
   #wa-toast {
     position: fixed;
-    top: -140px;
+    top: 50%;
     left: 50%;
-    transform: translateX(-50%);
-    width: min(360px, 90vw);
+    transform: translate(-50%, -50%) scale(0.85);
+    opacity: 0;
+    pointer-events: none;
+    width: min(360px, 88vw);
     background: #fff;
     border-radius: 14px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.25);
-    padding: 12px 14px;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.35);
+    padding: 14px 16px;
     display: flex;
     gap: 10px;
     align-items: flex-start;
     z-index: 999;
-    transition: top 0.5s cubic-bezier(.2,.9,.3,1.2);
+    transition: opacity 0.35s ease, transform 0.35s cubic-bezier(.2,.9,.3,1.2);
+    cursor: pointer;
   }
-  #wa-toast.show { top: 16px; }
+  #wa-toast.show { opacity: 1; transform: translate(-50%, -50%) scale(1); pointer-events: auto; }
   .wa-icon {
     width: 38px;
     height: 38px;
@@ -737,11 +770,12 @@
   </svg>
 </div>
 
-<div id="wa-toast">
+<div id="wa-backdrop" onclick="dismissToast()"></div>
+<div id="wa-toast" onclick="dismissToast()">
   <div class="wa-icon">💬</div>
   <div class="wa-content">
     <div class="wa-title-row">
-      <span class="wa-title" id="wa-sender">Dein Schatz</span>
+      <span class="wa-title" id="wa-sender">Fleißheft</span>
       <span class="wa-time" id="wa-time">jetzt</span>
     </div>
     <div class="wa-msg" id="wa-message"></div>
@@ -948,26 +982,33 @@ function updateRoleUI() {
   render();
 }
 
-function totalPoints() {
-  return Object.values(state.log || {}).reduce((sum, entry) => sum + (entry.points || 0), 0);
+// Live berechnete Summe: abgehakte (noch nicht gelöschte) Aufgaben + Sternchen. Rituale zählen bewusst nicht mit.
+function mainRewardProgress() {
+  const taskPoints = Object.values(state.tasks || {})
+    .filter(t => t.done)
+    .reduce((sum, t) => sum + (t.points || 0), 0);
+  const starPoints = Object.values(state.log || {})
+    .filter(entry => !entry.seriesId && !entry.reward)
+    .reduce((sum, entry) => sum + (entry.points || 0), 0);
+  return taskPoints + starPoints;
 }
 
 function render() {
   // score
-  const total = totalPoints();
+  const total = mainRewardProgress();
   document.getElementById('total-points').textContent = total;
 
   const mr = state.mainReward;
+  const combinedTotal = mainRewardProgress();
   const rewardDots = document.getElementById('reward-dots');
+  const filled = Math.min(combinedTotal, mr.target);
   rewardDots.innerHTML = Array.from({length: mr.target}, (_, i) =>
-    `<span class="series-dot ${i < mr.count ? 'filled' : ''}">★</span>`
+    `<span class="series-dot ${i < filled ? 'filled' : ''}">★</span>`
   ).join('');
   document.getElementById('reward-text').innerHTML = mr.reward
     ? 'Belohnung bei ' + mr.target + ': <strong>' + escapeHtml(mr.reward) + '</strong>'
     : 'Noch keine Belohnung festgelegt';
-  document.getElementById('reward-rounds').textContent = mr.completedRounds
-    ? mr.completedRounds + '× eingelöst'
-    : '';
+  document.getElementById('reward-rounds').textContent = '';
   document.getElementById('reward-edit-toggle').style.display = role === 'partner' ? 'inline-block' : 'none';
   if (role !== 'partner') {
     document.getElementById('reward-edit-row').style.display = 'none';
@@ -980,8 +1021,10 @@ function render() {
     taskList.innerHTML = '<div class="empty-note">Noch keine Aufgaben – leg eine an.</div>';
   } else {
     taskList.innerHTML = tasks.map(t => `
-      <div class="task-item">
-        <button class="task-check" onclick="completeTask('${t.id}')" title="Erledigt"></button>
+      <div class="task-item ${t.done ? 'task-done' : ''}">
+        ${t.done
+          ? `<div class="task-check task-check-done">★</div>`
+          : `<button class="task-check" onclick="completeTask('${t.id}')" title="Erledigt"></button>`}
         <div class="task-main">
           <div class="task-title">${escapeHtml(t.title)}</div>
           ${t.desc ? `<div class="task-desc">${escapeHtml(t.desc)}</div>` : ''}
@@ -1035,25 +1078,6 @@ function formatTime(ts) {
          d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 }
 
-// Erhöht den Belohnungs-Zähler per Transaktion (sicher auch bei mehreren Geräten gleichzeitig)
-function advanceMainReward(amount = 1) {
-  let rewardEarned = false;
-  let rewardText = '';
-  return dataRef.child('mainReward').transaction((current) => {
-    const mr = current || { target: 10, reward: '', count: 0, completedRounds: 0 };
-    mr.count = (mr.count || 0) + amount;
-    rewardText = mr.reward || '';
-    if (mr.count >= mr.target) {
-      mr.completedRounds = (mr.completedRounds || 0) + 1;
-      mr.count = 0;
-      rewardEarned = true;
-    } else {
-      rewardEarned = false;
-    }
-    return mr;
-  }).then(() => ({ rewardEarned, reward: rewardText }));
-}
-
 function showError(e) {
   console.error(e);
   alert('Fehler beim Speichern: ' + (e && e.message ? e.message : e) + '\n\nBitte Screenshot davon machen und schicken.');
@@ -1069,7 +1093,7 @@ async function addTask() {
   if (!title) return;
   const id = 't' + Date.now();
   try {
-    await dataRef.child('tasks/' + id).set({ id, title, points, desc });
+    await dataRef.child('tasks/' + id).set({ id, title, points, desc, done: false });
     titleInput.value = '';
     descInput.value = '';
   } catch (e) {
@@ -1089,20 +1113,8 @@ async function completeTask(id) {
   const task = (state.tasks || {})[id];
   if (!task) return;
   try {
-    const logId = dataRef.child('log').push().key;
-    const updates = {};
-    updates['tasks/' + id] = null;
-    updates['log/' + logId] = { id: logId, text: 'Aufgabe erledigt: ' + task.title, points: task.points, ts: Date.now() };
-    await dataRef.update(updates);
-
-    const result = await advanceMainReward(task.points);
-    if (result.rewardEarned) {
-      const rewardLogId = dataRef.child('log').push().key;
-      await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Belohnung erreicht: ' + (result.reward || '?'), points: 0, ts: Date.now(), reward: true });
-      showToast('🎉 Belohnung erreicht! ' + (result.reward || '?'), 0);
-    } else {
-      showToast('Neuer Stern für: ' + task.title, task.points);
-    }
+    await dataRef.child('tasks/' + id + '/done').set(true);
+    showPraiseToast();
   } catch (e) {
     showError(e);
   }
@@ -1166,9 +1178,9 @@ async function giveSeriesStar(id) {
     if (rewardEarned) {
       const rewardLogId = dataRef.child('log').push().key;
       await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Serie „' + seriesName + '" komplett – Belohnung: ' + (rewardText || '?'), points: 0, ts: Date.now(), seriesId: id, seriesName, reward: true });
-      showToast('🎉 Serie „' + seriesName + '" komplett! Belohnung: ' + (rewardText || '?'), 0);
+      showToast('🎉 Serie „' + seriesName + '" komplett! Belohnung: ' + (rewardText || '?'));
     } else {
-      showToast(text, 1);
+      showPraiseToast();
     }
   } catch (e) {
     showError(e);
@@ -1184,15 +1196,7 @@ async function giveStar() {
     const logId = dataRef.child('log').push().key;
     await dataRef.child('log/' + logId).set({ id: logId, text: message, points: 1, ts: Date.now() });
     msgInput.value = '';
-
-    const result = await advanceMainReward();
-    if (result.rewardEarned) {
-      const rewardLogId = dataRef.child('log').push().key;
-      await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Belohnung erreicht: ' + (result.reward || '?'), points: 0, ts: Date.now(), reward: true });
-      showToast('🎉 Belohnung erreicht! ' + (result.reward || '?'), 0);
-    } else {
-      showToast(message, 1);
-    }
+    showPraiseToast();
   } catch (e) {
     showError(e);
   }
@@ -1223,13 +1227,47 @@ async function saveMainReward() {
 }
 
 let toastTimer = null;
-function showToast(message, points) {
+const PRAISE_PHRASES = [
+  'Braves Mädchen.',
+  'Genau so soll es sein – gehorsam und brav.',
+  'Das hast du dir redlich verdient.',
+  'Perfekt gemacht. Genau richtig.',
+  'So gefällt mir das.',
+  'Weiter so, brav bleiben.',
+  'Ein Sternchen mehr, ganz verdient.',
+  'Gut gemacht. Sehr gut sogar.',
+  'Du bist genau da, wo du sein sollst.',
+  'Das war vorbildlich.',
+  'Deine Mühe wird gesehen und belohnt.',
+  'Brav. Genau so.',
+  'So macht man das richtig.',
+  'Ein Punkt für dich – wohlverdient.',
+  'Du machst das wirklich gut.',
+  'Gehorsam sieht gut aus an dir.',
+  'Weiter so, du bist auf dem richtigen Weg.',
+  'Das verdient Anerkennung.'
+];
+
+function showPraiseToast() {
+  const phrase = PRAISE_PHRASES[Math.floor(Math.random() * PRAISE_PHRASES.length)];
+  showToast(phrase);
+}
+
+function showToast(message) {
   const toast = document.getElementById('wa-toast');
+  const backdrop = document.getElementById('wa-backdrop');
   document.getElementById('wa-message').textContent = '⭐ ' + message;
   document.getElementById('wa-time').textContent = 'jetzt';
   toast.classList.add('show');
+  backdrop.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove('show'), 4500);
+  toastTimer = setTimeout(dismissToast, 4500);
+}
+
+function dismissToast() {
+  document.getElementById('wa-toast').classList.remove('show');
+  document.getElementById('wa-backdrop').classList.remove('show');
+  clearTimeout(toastTimer);
 }
 
 load();
