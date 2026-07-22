@@ -349,6 +349,8 @@
     font-size: 0.9rem;
     transition: all 0.2s ease;
   }
+  .task-check::after { content: ''; }
+  .task-check:hover::after { content: '✓'; }
   .task-check:hover { background: var(--sage); color: #06110C; box-shadow: 0 0 12px rgba(111,224,168,0.7); }
 
   .task-title {
@@ -861,7 +863,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const dataRef = firebase.database().ref('fleissheftData');
 
-const DEFAULT_STATE = { tasks: {}, log: {}, series: {}, mainReward: { target: 5, reward: '', count: 0, completedRounds: 0 } };
+const DEFAULT_STATE = { tasks: {}, log: {}, series: {}, mainReward: { target: 10, reward: '', count: 0, completedRounds: 0 } };
 let state = JSON.parse(JSON.stringify(DEFAULT_STATE));
 let role = 'marie';
 
@@ -892,7 +894,11 @@ function load() {
     if (!state.series) state.series = {};
     if (!state.tasks) state.tasks = {};
     if (!state.log) state.log = {};
-    if (!state.mainReward) state.mainReward = { target: 5, reward: '', count: 0, completedRounds: 0 };
+    if (!state.mainReward) state.mainReward = { target: 10, reward: '', count: 0, completedRounds: 0 };
+    if (state.mainReward.target !== 10) {
+      state.mainReward.target = 10;
+      dataRef.child('mainReward/target').set(10).catch(() => {});
+    }
     render();
   }, (error) => {
     console.error('Firebase-Verbindung fehlgeschlagen', error);
@@ -975,7 +981,7 @@ function render() {
   } else {
     taskList.innerHTML = tasks.map(t => `
       <div class="task-item">
-        <button class="task-check" onclick="completeTask('${t.id}')" title="Erledigt">✓</button>
+        <button class="task-check" onclick="completeTask('${t.id}')" title="Erledigt"></button>
         <div class="task-main">
           <div class="task-title">${escapeHtml(t.title)}</div>
           ${t.desc ? `<div class="task-desc">${escapeHtml(t.desc)}</div>` : ''}
@@ -1030,12 +1036,12 @@ function formatTime(ts) {
 }
 
 // Erhöht den Belohnungs-Zähler per Transaktion (sicher auch bei mehreren Geräten gleichzeitig)
-function advanceMainReward() {
+function advanceMainReward(amount = 1) {
   let rewardEarned = false;
   let rewardText = '';
   return dataRef.child('mainReward').transaction((current) => {
-    const mr = current || { target: 5, reward: '', count: 0, completedRounds: 0 };
-    mr.count = (mr.count || 0) + 1;
+    const mr = current || { target: 10, reward: '', count: 0, completedRounds: 0 };
+    mr.count = (mr.count || 0) + amount;
     rewardText = mr.reward || '';
     if (mr.count >= mr.target) {
       mr.completedRounds = (mr.completedRounds || 0) + 1;
@@ -1089,7 +1095,7 @@ async function completeTask(id) {
     updates['log/' + logId] = { id: logId, text: 'Aufgabe erledigt: ' + task.title, points: task.points, ts: Date.now() };
     await dataRef.update(updates);
 
-    const result = await advanceMainReward();
+    const result = await advanceMainReward(task.points);
     if (result.rewardEarned) {
       const rewardLogId = dataRef.child('log').push().key;
       await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Belohnung erreicht: ' + (result.reward || '?'), points: 0, ts: Date.now(), reward: true });
