@@ -861,7 +861,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const dataRef = firebase.database().ref('fleissheftData');
 
-const DEFAULT_STATE = { tasks: [], log: [], series: [], mainReward: { target: 5, reward: '', count: 0, completedRounds: 0 } };
+const DEFAULT_STATE = { tasks: {}, log: {}, series: {}, mainReward: { target: 5, reward: '', count: 0, completedRounds: 0 } };
 let state = JSON.parse(JSON.stringify(DEFAULT_STATE));
 let role = 'marie';
 
@@ -889,9 +889,9 @@ function load() {
   dataRef.on('value', (snapshot) => {
     const val = snapshot.val();
     state = val ? val : JSON.parse(JSON.stringify(DEFAULT_STATE));
-    if (!state.series) state.series = [];
-    if (!state.tasks) state.tasks = [];
-    if (!state.log) state.log = [];
+    if (!state.series) state.series = {};
+    if (!state.tasks) state.tasks = {};
+    if (!state.log) state.log = {};
     if (!state.mainReward) state.mainReward = { target: 5, reward: '', count: 0, completedRounds: 0 };
     render();
   }, (error) => {
@@ -942,14 +942,8 @@ function updateRoleUI() {
   render();
 }
 
-function saveData() {
-  return dataRef.set(state).catch((e) => {
-    console.error('Speichern fehlgeschlagen', e);
-  });
-}
-
 function totalPoints() {
-  return state.log.reduce((sum, entry) => sum + (entry.points || 0), 0);
+  return Object.values(state.log || {}).reduce((sum, entry) => sum + (entry.points || 0), 0);
 }
 
 function render() {
@@ -974,11 +968,12 @@ function render() {
   }
 
   // tasks
+  const tasks = Object.values(state.tasks || {});
   const taskList = document.getElementById('task-list');
-  if (!state.tasks.length) {
+  if (!tasks.length) {
     taskList.innerHTML = '<div class="empty-note">Noch keine Aufgaben – leg eine an.</div>';
   } else {
-    taskList.innerHTML = state.tasks.map(t => `
+    taskList.innerHTML = tasks.map(t => `
       <div class="task-item">
         <button class="task-check" onclick="completeTask('${t.id}')" title="Erledigt">✓</button>
         <div class="task-main">
@@ -992,11 +987,12 @@ function render() {
   }
 
   // series
+  const seriesArr = Object.values(state.series || {});
   const seriesList = document.getElementById('series-list');
-  if (!state.series.length) {
+  if (!seriesArr.length) {
     seriesList.innerHTML = '<div class="empty-note">Noch keine Serie angelegt.</div>';
   } else {
-    seriesList.innerHTML = state.series.map(s => {
+    seriesList.innerHTML = seriesArr.map(s => {
       const dots = Array.from({length: s.target}, (_, i) =>
         `<span class="series-dot ${i < s.count ? 'filled' : ''}">★</span>`
       ).join('');
@@ -1033,6 +1029,25 @@ function formatTime(ts) {
          d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 }
 
+// Erhöht den Belohnungs-Zähler per Transaktion (sicher auch bei mehreren Geräten gleichzeitig)
+function advanceMainReward() {
+  let rewardEarned = false;
+  let rewardText = '';
+  return dataRef.child('mainReward').transaction((current) => {
+    const mr = current || { target: 5, reward: '', count: 0, completedRounds: 0 };
+    mr.count = (mr.count || 0) + 1;
+    rewardText = mr.reward || '';
+    if (mr.count >= mr.target) {
+      mr.completedRounds = (mr.completedRounds || 0) + 1;
+      mr.count = 0;
+      rewardEarned = true;
+    } else {
+      rewardEarned = false;
+    }
+    return mr;
+  }).then(() => ({ rewardEarned, reward: rewardText }));
+}
+
 async function addTask() {
   const titleInput = document.getElementById('new-task-title');
   const pointsInput = document.getElementById('new-task-points');
@@ -1041,11 +1056,34 @@ async function addTask() {
   const points = parseInt(pointsInput.value, 10) || 1;
   const desc = descInput.value.trim();
   if (!title) return;
-  state.tasks.push({ id: 't' + Date.now(), title, points, desc });
-  await saveData();
+  const id = 't' + Date.now();
+  await dataRef.child('tasks/' + id).set({ id, title, points, desc });
   titleInput.value = '';
   descInput.value = '';
-  render();
+}
+
+async function removeTask(id) {
+  await dataRef.child('tasks/' + id).remove();
+}
+
+async function completeTask(id) {
+  const task = (state.tasks || {})[id];
+  if (!task) return;
+
+  const logId = dataRef.child('log').push().key;
+  const updates = {};
+  updates['tasks/' + id] = null;
+  updates['log/' + logId] = { id: logId, text: 'Aufgabe erledigt: ' + task.title, points: task.points, ts: Date.now() };
+  await dataRef.update(updates);
+
+  const result = await advanceMainReward();
+  if (result.rewardEarned) {
+    const rewardLogId = dataRef.child('log').push().key;
+    await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Belohnung erreicht: ' + (result.reward || '?'), points: 0, ts: Date.now(), reward: true });
+    showToast('🎉 Belohnung erreicht! ' + (result.reward || '?'), 0);
+  } else {
+    showToast('Neuer Stern für: ' + task.title, task.points);
+  }
 }
 
 async function addSeries() {
@@ -1056,87 +1094,50 @@ async function addSeries() {
   const target = parseInt(targetInput.value, 10) || 10;
   const reward = rewardInput.value.trim();
   if (!name) return;
-  state.series.push({ id: 's' + Date.now(), name, target, reward, count: 0, completedRounds: 0 });
-  await saveData();
+  const id = 's' + Date.now();
+  await dataRef.child('series/' + id).set({ id, name, target, reward, count: 0, completedRounds: 0 });
   nameInput.value = '';
   rewardInput.value = '';
-  render();
 }
 
 async function removeSeries(id) {
-  state.series = state.series.filter(s => s.id !== id);
-  await saveData();
-  render();
+  await dataRef.child('series/' + id).remove();
 }
 
 async function giveSeriesStar(id) {
   const noteInput = document.getElementById('series-note-' + id);
   const note = noteInput ? noteInput.value.trim() : '';
-  const series = state.series.find(s => s.id === id);
-  if (!series) return;
-  series.count += 1;
-  const text = note ? note : 'Stern für „' + series.name + '"';
-  state.log.push({ id: 'l' + Date.now(), text, points: 1, ts: Date.now(), seriesId: series.id, seriesName: series.name });
+  const seriesBefore = (state.series || {})[id];
+  if (!seriesBefore) return;
+  const seriesName = seriesBefore.name;
+  const text = note ? note : 'Stern für „' + seriesName + '"';
 
   let rewardEarned = false;
-  if (series.count >= series.target) {
-    series.completedRounds = (series.completedRounds || 0) + 1;
-    state.log.push({
-      id: 'l' + (Date.now() + 1),
-      text: 'Serie „' + series.name + '" komplett – Belohnung: ' + (series.reward || '?'),
-      points: 0,
-      ts: Date.now() + 1,
-      seriesId: series.id,
-      seriesName: series.name,
-      reward: true
-    });
-    series.count = 0;
-    rewardEarned = true;
-  }
+  let rewardText = '';
+  await dataRef.child('series/' + id).transaction((current) => {
+    if (!current) return current;
+    current.count = (current.count || 0) + 1;
+    rewardText = current.reward || '';
+    if (current.count >= current.target) {
+      current.completedRounds = (current.completedRounds || 0) + 1;
+      current.count = 0;
+      rewardEarned = true;
+    } else {
+      rewardEarned = false;
+    }
+    return current;
+  });
 
-  await saveData();
+  const logId = dataRef.child('log').push().key;
+  await dataRef.child('log/' + logId).set({ id: logId, text, points: 1, ts: Date.now(), seriesId: id, seriesName });
   if (noteInput) noteInput.value = '';
-  render();
 
   if (rewardEarned) {
-    showToast('🎉 Serie „' + series.name + '" komplett! Belohnung: ' + (series.reward || '?'), 0);
+    const rewardLogId = dataRef.child('log').push().key;
+    await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Serie „' + seriesName + '" komplett – Belohnung: ' + (rewardText || '?'), points: 0, ts: Date.now(), seriesId: id, seriesName, reward: true });
+    showToast('🎉 Serie „' + seriesName + '" komplett! Belohnung: ' + (rewardText || '?'), 0);
   } else {
     showToast(text, 1);
-  }
-}
-
-async function removeTask(id) {
-  state.tasks = state.tasks.filter(t => t.id !== id);
-  await saveData();
-  render();
-}
-
-function advanceMainReward() {
-  const mr = state.mainReward;
-  mr.count += 1;
-  if (mr.count >= mr.target) {
-    mr.completedRounds = (mr.completedRounds || 0) + 1;
-    mr.count = 0;
-    return true;
-  }
-  return false;
-}
-
-async function completeTask(id) {
-  const task = state.tasks.find(t => t.id === id);
-  if (!task) return;
-  state.tasks = state.tasks.filter(t => t.id !== id);
-  state.log.push({ id: 'l' + Date.now(), text: 'Aufgabe erledigt: ' + task.title, points: task.points, ts: Date.now() });
-  const rewardEarned = advanceMainReward();
-  if (rewardEarned) {
-    state.log.push({ id: 'l' + (Date.now() + 1), text: 'Belohnung erreicht: ' + (state.mainReward.reward || '?'), points: 0, ts: Date.now() + 1, reward: true });
-  }
-  await saveData();
-  render();
-  if (rewardEarned) {
-    showToast('🎉 Belohnung erreicht! ' + (state.mainReward.reward || '?'), 0);
-  } else {
-    showToast('Neuer Stern für: ' + task.title, task.points);
   }
 }
 
@@ -1144,16 +1145,16 @@ async function giveStar() {
   const msgInput = document.getElementById('star-message');
   const message = msgInput.value.trim();
   if (!message) return;
-  state.log.push({ id: 'l' + Date.now(), text: message, points: 1, ts: Date.now() });
-  const rewardEarned = advanceMainReward();
-  if (rewardEarned) {
-    state.log.push({ id: 'l' + (Date.now() + 1), text: 'Belohnung erreicht: ' + (state.mainReward.reward || '?'), points: 0, ts: Date.now() + 1, reward: true });
-  }
-  await saveData();
+
+  const logId = dataRef.child('log').push().key;
+  await dataRef.child('log/' + logId).set({ id: logId, text: message, points: 1, ts: Date.now() });
   msgInput.value = '';
-  render();
-  if (rewardEarned) {
-    showToast('🎉 Belohnung erreicht! ' + (state.mainReward.reward || '?'), 0);
+
+  const result = await advanceMainReward();
+  if (result.rewardEarned) {
+    const rewardLogId = dataRef.child('log').push().key;
+    await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Belohnung erreicht: ' + (result.reward || '?'), points: 0, ts: Date.now(), reward: true });
+    showToast('🎉 Belohnung erreicht! ' + (result.reward || '?'), 0);
   } else {
     showToast(message, 1);
   }
@@ -1175,10 +1176,8 @@ function toggleRewardEdit() {
 async function saveMainReward() {
   const input = document.getElementById('reward-edit-input');
   const value = input.value.trim();
-  state.mainReward.reward = value;
-  await saveData();
+  await dataRef.child('mainReward/reward').set(value);
   document.getElementById('reward-edit-row').style.display = 'none';
-  render();
 }
 
 let toastTimer = null;
