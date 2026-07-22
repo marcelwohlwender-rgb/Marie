@@ -843,6 +843,17 @@
         </div>
       </div>
     </section>
+
+    <section>
+      <div class="section-title">Wunschliste</div>
+      <div class="card">
+        <div id="wish-list"></div>
+        <div class="add-row" id="add-wish-row" style="margin-top:10px;">
+          <input type="text" id="new-wish-text" placeholder="Deine Idee für eine Aufgabe oder Belohnung...">
+          <button class="primary" onclick="addWish()">+</button>
+        </div>
+      </div>
+    </section>
   </div>
 
   <div class="tab-panel" data-tab="ketten">
@@ -897,7 +908,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const dataRef = firebase.database().ref('fleissheftData');
 
-const DEFAULT_STATE = { tasks: {}, log: {}, series: {}, mainReward: { target: 10, reward: '', count: 0, completedRounds: 0 } };
+const DEFAULT_STATE = { tasks: {}, log: {}, series: {}, wishes: {}, mainReward: { target: 10, reward: '', count: 0, completedRounds: 0 } };
 let state = JSON.parse(JSON.stringify(DEFAULT_STATE));
 let role = 'marie';
 
@@ -916,6 +927,10 @@ function switchTab(name) {
   deco.classList.add('tab-' + name);
 }
 
+let isFirstSnapshot = true;
+let knownLogKeys = new Set();
+let knownDoneTaskIds = new Set();
+
 function load() {
   role = localStorage.getItem('fleissheft-role') || 'marie';
   updateRoleUI();
@@ -928,11 +943,42 @@ function load() {
     if (!state.series) state.series = {};
     if (!state.tasks) state.tasks = {};
     if (!state.log) state.log = {};
+    if (!state.wishes) state.wishes = {};
     if (!state.mainReward) state.mainReward = { target: 10, reward: '', count: 0, completedRounds: 0 };
     if (state.mainReward.target !== 10) {
       state.mainReward.target = 10;
       dataRef.child('mainReward/target').set(10).catch(() => {});
     }
+
+    const currentLogKeys = new Set(Object.keys(state.log || {}));
+    const currentDoneTaskIds = new Set(
+      Object.values(state.tasks || {}).filter(t => t.done).map(t => t.id)
+    );
+
+    if (!isFirstSnapshot) {
+      // Neue Log-Einträge seit dem letzten Stand (Sternchen, Rituale, Belohnungs-Meldungen)
+      currentLogKeys.forEach((key) => {
+        if (knownLogKeys.has(key)) return;
+        const entry = state.log[key];
+        if (!entry) return;
+        if (entry.reward) {
+          showToast(entry.text);
+        } else {
+          showPraiseToast();
+        }
+      });
+      // Neu abgehakte Aufgaben seit dem letzten Stand
+      currentDoneTaskIds.forEach((id) => {
+        if (!knownDoneTaskIds.has(id)) {
+          showPraiseToast();
+        }
+      });
+    }
+
+    knownLogKeys = currentLogKeys;
+    knownDoneTaskIds = currentDoneTaskIds;
+    isFirstSnapshot = false;
+
     render();
   }, (error) => {
     console.error('Firebase-Verbindung fehlgeschlagen', error);
@@ -979,6 +1025,7 @@ function updateRoleUI() {
   document.getElementById('add-task-row').style.display = role === 'partner' ? 'flex' : 'none';
   document.getElementById('add-task-desc-row').style.display = role === 'partner' ? 'flex' : 'none';
   document.getElementById('add-series-card').style.display = role === 'partner' ? 'block' : 'none';
+  document.getElementById('add-wish-row').style.display = role === 'marie' ? 'flex' : 'none';
   render();
 }
 
@@ -1035,6 +1082,25 @@ function render() {
     `).join('');
   }
 
+  // wishes
+  const wishes = Object.values(state.wishes || {});
+  const wishList = document.getElementById('wish-list');
+  if (!wishes.length) {
+    wishList.innerHTML = '<div class="empty-note">Noch keine Wünsche eingetragen.</div>';
+  } else {
+    wishList.innerHTML = wishes.map(w => `
+      <div class="task-item">
+        <div class="task-main">
+          <div class="task-title">${escapeHtml(w.text)}</div>
+        </div>
+        ${role === 'partner' ? `
+          <button class="task-remove" onclick="adoptWish('${w.id}')" title="Als Aufgabe übernehmen">→</button>
+          <button class="task-remove" onclick="removeWish('${w.id}')" title="Verwerfen">✕</button>
+        ` : ''}
+      </div>
+    `).join('');
+  }
+
   // series
   const seriesArr = Object.values(state.series || {});
   const seriesList = document.getElementById('series-list');
@@ -1083,6 +1149,39 @@ function showError(e) {
   alert('Fehler beim Speichern: ' + (e && e.message ? e.message : e) + '\n\nBitte Screenshot davon machen und schicken.');
 }
 
+async function addWish() {
+  const input = document.getElementById('new-wish-text');
+  const text = input.value.trim();
+  if (!text) return;
+  const id = 'w' + Date.now();
+  try {
+    await dataRef.child('wishes/' + id).set({ id, text, ts: Date.now() });
+    input.value = '';
+  } catch (e) {
+    showError(e);
+  }
+}
+
+async function removeWish(id) {
+  try {
+    await dataRef.child('wishes/' + id).remove();
+  } catch (e) {
+    showError(e);
+  }
+}
+
+async function adoptWish(id) {
+  const wish = (state.wishes || {})[id];
+  if (!wish) return;
+  try {
+    const titleInput = document.getElementById('new-task-title');
+    if (titleInput) titleInput.value = wish.text;
+    await dataRef.child('wishes/' + id).remove();
+  } catch (e) {
+    showError(e);
+  }
+}
+
 async function addTask() {
   const titleInput = document.getElementById('new-task-title');
   const pointsInput = document.getElementById('new-task-points');
@@ -1114,7 +1213,6 @@ async function completeTask(id) {
   if (!task) return;
   try {
     await dataRef.child('tasks/' + id + '/done').set(true);
-    showPraiseToast();
   } catch (e) {
     showError(e);
   }
@@ -1178,9 +1276,6 @@ async function giveSeriesStar(id) {
     if (rewardEarned) {
       const rewardLogId = dataRef.child('log').push().key;
       await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Serie „' + seriesName + '" komplett – Belohnung: ' + (rewardText || '?'), points: 0, ts: Date.now(), seriesId: id, seriesName, reward: true });
-      showToast('🎉 Serie „' + seriesName + '" komplett! Belohnung: ' + (rewardText || '?'));
-    } else {
-      showPraiseToast();
     }
   } catch (e) {
     showError(e);
@@ -1196,7 +1291,6 @@ async function giveStar() {
     const logId = dataRef.child('log').push().key;
     await dataRef.child('log/' + logId).set({ id: logId, text: message, points: 1, ts: Date.now() });
     msgInput.value = '';
-    showPraiseToast();
   } catch (e) {
     showError(e);
   }
