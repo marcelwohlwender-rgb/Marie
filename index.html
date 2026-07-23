@@ -889,7 +889,7 @@
       <div class="card">
         <div class="empty-note" style="padding:2px 0;">Hier gibt's nichts zu tun – lehn dich zurück, die Überraschung kommt von ganz allein.</div>
         <div class="add-row" style="margin-top:12px;">
-          <button class="primary" onclick="enablePush()" id="push-enable-btn" style="width:100%;">🔔 Benachrichtigungen aktivieren</button>
+          <button class="primary" onclick="togglePush()" id="push-enable-btn" style="width:100%;">🔔 Benachrichtigungen aktivieren</button>
         </div>
         <div class="empty-note" id="push-status" style="margin-top:8px; font-size:0.75rem;"></div>
       </div>
@@ -949,12 +949,29 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 
-async function enablePush() {
+async function togglePush() {
   const statusEl = document.getElementById('push-status');
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     statusEl.textContent = 'Dein Browser unterstützt das leider nicht.';
     return;
   }
+  try {
+    const registration = await navigator.serviceWorker.getRegistration('/service-worker.js');
+    const existing = registration ? await registration.pushManager.getSubscription() : null;
+
+    if (existing) {
+      await disablePush(existing);
+    } else {
+      await enablePush();
+    }
+  } catch (e) {
+    console.error(e);
+    statusEl.textContent = 'Fehler: ' + e.message;
+  }
+}
+
+async function enablePush() {
+  const statusEl = document.getElementById('push-status');
   try {
     statusEl.textContent = 'Wird eingerichtet...';
     const registration = await navigator.serviceWorker.register('/service-worker.js');
@@ -975,10 +992,41 @@ async function enablePush() {
     }
 
     await dataRef.child('pushSubscription').set(subscription.toJSON());
+    updatePushButtonUI(true);
     statusEl.textContent = 'Aktiviert – du bekommst jetzt echte Benachrichtigungen.';
   } catch (e) {
     console.error(e);
     statusEl.textContent = 'Fehler: ' + e.message;
+  }
+}
+
+async function disablePush(subscription) {
+  const statusEl = document.getElementById('push-status');
+  try {
+    await subscription.unsubscribe();
+    await dataRef.child('pushSubscription').remove();
+    updatePushButtonUI(false);
+    statusEl.textContent = 'Deaktiviert – du bekommst keine Benachrichtigungen mehr.';
+  } catch (e) {
+    console.error(e);
+    statusEl.textContent = 'Fehler: ' + e.message;
+  }
+}
+
+function updatePushButtonUI(isActive) {
+  const btn = document.getElementById('push-enable-btn');
+  if (!btn) return;
+  btn.textContent = isActive ? '🔕 Benachrichtigungen deaktivieren' : '🔔 Benachrichtigungen aktivieren';
+}
+
+async function refreshPushButtonState() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration('/service-worker.js');
+    const existing = registration ? await registration.pushManager.getSubscription() : null;
+    updatePushButtonUI(!!existing);
+  } catch (e) {
+    // still fine, button stays at default state
   }
 }
 
@@ -1085,6 +1133,7 @@ function updateRoleUI() {
   document.getElementById('add-task-desc-row').style.display = role === 'partner' ? 'flex' : 'none';
   document.getElementById('add-series-card').style.display = role === 'partner' ? 'block' : 'none';
   document.getElementById('add-wish-row').style.display = role === 'marie' ? 'flex' : 'none';
+  if (role === 'marie') refreshPushButtonState();
   render();
 }
 
