@@ -827,6 +827,7 @@
     <button class="tab-btn" id="tab-btn-auftraege" onclick="switchTab('auftraege')">Aufgaben</button>
     <button class="tab-btn" id="tab-btn-ketten" onclick="switchTab('ketten')">Rituale</button>
     <button class="tab-btn" id="tab-btn-sternenregen" onclick="switchTab('sternenregen')">Sternchen</button>
+    <button class="tab-btn" id="tab-btn-wunschliste" onclick="switchTab('wunschliste')">Wunschliste</button>
   </div>
 
   <div class="tab-panel" data-tab="auftraege">
@@ -841,17 +842,6 @@
         </div>
         <div class="add-row" id="add-task-desc-row" style="margin-top:6px;">
           <input type="text" id="new-task-desc" placeholder="Notiz (optional)...">
-        </div>
-      </div>
-    </section>
-
-    <section>
-      <div class="section-title">Wunschliste</div>
-      <div class="card">
-        <div id="wish-list"></div>
-        <div class="add-row" id="add-wish-row" style="margin-top:10px;">
-          <input type="text" id="new-wish-text" placeholder="Deine Idee für eine Aufgabe oder Belohnung...">
-          <button class="primary" onclick="addWish()">+</button>
         </div>
       </div>
     </section>
@@ -895,6 +885,19 @@
       </div>
     </section>
   </div>
+
+  <div class="tab-panel" data-tab="wunschliste">
+    <section>
+      <div class="section-title">Wunschliste</div>
+      <div class="card">
+        <div id="wish-list"></div>
+        <div class="add-row" id="add-wish-row" style="margin-top:10px;">
+          <input type="text" id="new-wish-text" placeholder="Womit könntest du dir eine Belohnung verdienen?">
+          <button class="primary" onclick="addWish()">+</button>
+        </div>
+      </div>
+    </section>
+  </div>
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
@@ -928,7 +931,7 @@ function switchTab(name) {
     panel.classList.toggle('active', panel.dataset.tab === name);
   });
   const deco = document.getElementById('bg-deco');
-  deco.classList.remove('tab-auftraege', 'tab-ketten', 'tab-sternenregen');
+  deco.classList.remove('tab-auftraege', 'tab-ketten', 'tab-sternenregen', 'tab-wunschliste');
   deco.classList.add('tab-' + name);
 }
 
