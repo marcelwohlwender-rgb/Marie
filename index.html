@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Marie's Fleißheft</title>
+<link rel="manifest" href="/manifest.json">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Karla:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
@@ -887,6 +888,10 @@
     <section id="star-empty-note">
       <div class="card">
         <div class="empty-note" style="padding:2px 0;">Hier gibt's nichts zu tun – lehn dich zurück, die Überraschung kommt von ganz allein.</div>
+        <div class="add-row" style="margin-top:12px;">
+          <button class="primary" onclick="enablePush()" id="push-enable-btn" style="width:100%;">🔔 Benachrichtigungen aktivieren</button>
+        </div>
+        <div class="empty-note" id="push-status" style="margin-top:8px; font-size:0.75rem;"></div>
       </div>
     </section>
   </div>
@@ -930,6 +935,60 @@ function switchTab(name) {
 let isFirstSnapshot = true;
 let knownLogKeys = new Set();
 let knownDoneTaskIds = new Set();
+
+const VAPID_PUBLIC_KEY = 'BLVG4eUo1hNWpiVUz5VSxm-FECEubt03Wox1c-fNj6nZa7ZaaD8bR5VT600afBXzZi2A3DeXOkW9ALWwMY4NEv4';
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+async function enablePush() {
+  const statusEl = document.getElementById('push-status');
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    statusEl.textContent = 'Dein Browser unterstützt das leider nicht.';
+    return;
+  }
+  try {
+    statusEl.textContent = 'Wird eingerichtet...';
+    const registration = await navigator.serviceWorker.register('/service-worker.js');
+    await navigator.serviceWorker.ready;
+
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      statusEl.textContent = 'Erlaubnis wurde nicht erteilt.';
+      return;
+    }
+
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+      });
+    }
+
+    await dataRef.child('pushSubscription').set(subscription.toJSON());
+    statusEl.textContent = 'Aktiviert – du bekommst jetzt echte Benachrichtigungen.';
+  } catch (e) {
+    console.error(e);
+    statusEl.textContent = 'Fehler: ' + e.message;
+  }
+}
+
+function sendPushNotification(text) {
+  fetch('/.netlify/functions/send-push', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text })
+  }).catch((e) => console.error('Push-Versand fehlgeschlagen', e));
+}
 
 function load() {
   role = localStorage.getItem('fleissheft-role') || 'marie';
@@ -1276,6 +1335,9 @@ async function giveSeriesStar(id) {
     if (rewardEarned) {
       const rewardLogId = dataRef.child('log').push().key;
       await dataRef.child('log/' + rewardLogId).set({ id: rewardLogId, text: 'Serie „' + seriesName + '" komplett – Belohnung: ' + (rewardText || '?'), points: 0, ts: Date.now(), seriesId: id, seriesName, reward: true });
+      sendPushNotification('🎉 Serie „' + seriesName + '" komplett! Belohnung: ' + (rewardText || '?'));
+    } else {
+      sendPushNotification(PRAISE_PHRASES[Math.floor(Math.random() * PRAISE_PHRASES.length)]);
     }
   } catch (e) {
     showError(e);
@@ -1291,6 +1353,7 @@ async function giveStar() {
     const logId = dataRef.child('log').push().key;
     await dataRef.child('log/' + logId).set({ id: logId, text: message, points: 1, ts: Date.now() });
     msgInput.value = '';
+    sendPushNotification(PRAISE_PHRASES[Math.floor(Math.random() * PRAISE_PHRASES.length)]);
   } catch (e) {
     showError(e);
   }
